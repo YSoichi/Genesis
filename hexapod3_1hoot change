@@ -1,0 +1,155 @@
+<?xml version="1.0" ?>
+<robot name="hexapod" xmlns:xacro="http://ros.org/wiki/xacro">
+    <!-- base modelをどう配置するかという設定-->
+    <link name="body">
+        <inertial>
+            <mass value="3.3"/>
+            <origin xyz="0.0 0.0 0.0"/>
+            <!-- base inertia param を聞く 慣性に関すること--> 
+            <inertia ixx="0.02" ixy="0" ixz="0" iyy="0.02" iyz="0" izz="0.03"/>
+        </inertial>
+        <!-- 見た目をどうするかという欄-->
+        <visual>
+            <geometry>
+              <!--  <mesh filename="meshes/mini_body.obj"/> -->
+              <!-- 円柱モデルの追加 ↑はモデル参照をしていたもの-->
+                    <cylinder length="0.05" radius="0.22"/>
+            </geometry>
+            <!-- モデルの位置調整とはなにか? origin で指定しているのに調整を行うことの意味 -->
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+        </visual>
+        <!-- 衝突判定のためのモデルの形の設定-->
+        <collision>
+            <geometry>
+                <cylinder length="0.05" radius="0.22"/>
+            </geometry>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+        </collision>
+    </link>
+
+    <!--!!!!!!!!!!!! Front Right Leg !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-->
+    <!-- jointの定義 continuous (連続回転型)→ 制御側で制限をかけるか, 物理的に360度回転可能-->
+    <!--body → abduct(外転) → thigh(大腿) → shank(下腿) → toe(足先) -->
+    <!--  x軸上に回転するジョイントパーツ(点)-->
+    <joint name="torso_to_abduct_fr_j" type="continuous">
+        <axis xyz="1 0 0"/>
+        <origin rpy="0 0 0" xyz="0.22 0.0 -0.025"/>
+        <!-- 前後0.19m 左右0.049m の位置に長方形の形で配置-->
+        <parent link="body"/>
+        <child link="abduct_fr"/>
+    </joint>
+    <!-- abduct_fr 前右脚のリンク-->
+    <link name="abduct_fr">
+        <inertial>
+            <mass value="0.54"/>
+            <origin xyz="0.0 0 -0.075"/>
+            <inertia ixx="0.001" ixy="0.0" ixz="0.0" 
+                iyy="0.0001" iyz="0.0" izz="0.0001"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <!--mesh filename="meshes/mini_abad.obj"/ -->
+                <cylinder length="0.15" radius="0.02"/>
+            </geometry>
+            <origin rpy="0 0 0" xyz="0 0 -0.075"/>
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder length="0.15" radius="0.02"/>
+            </geometry>
+            <origin rpy="0 0 0" xyz="0 0 -0.075"/>
+        </collision>
+    </link>
+    <! -- abduct_fr と thigh_fr をつなぐジョイントの定義 -->
+    <joint name="abduct_fr_to_thigh_fr_j" type="continuous">
+        <axis xyz="0 -1 0"/>
+        <origin rpy="0.0 0.0 0.0" xyz="0.22 0.0 -0.025"/>
+        <parent link="abduct_fr"/>
+        <child link="thigh_fr"/>
+    </joint>
+    <link name="thigh_fr">
+        <inertial>
+            <mass value="0.634"/>
+            <origin xyz="0.0 0.0 -0.075"/>
+            <inertia ixx="0.001" ixy="0.0" ixz="-0.0" 
+                iyy="0.001" iyz="0.0" izz="0.0002"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <!--mesh filename="meshes/mini_upper_link.obj"/-->
+                <cylinder length="0.15" radius="0.02"/>
+            </geometry>
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 -0.075"/>
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder length="0.15" radius="0.02"/>
+            </geometry>
+            <origin rpy="0 0 0" xyz="0 0 -0.075"/>
+        </collision>
+    </link>
+
+    <joint name="thigh_fr_to_knee_fr_j" type="continuous">
+        <axis xyz="0 -1 0"/>
+        <origin rpy="0.0 0 0.0" xyz="0.0 0.0 0.0"/>
+        <parent link="thigh_fr"/>
+        <child link="shank_fr"/>
+    </joint>
+    <link name="shank_fr">
+        <inertial>
+            <mass value="0.064"/>
+            <origin xyz="0.0 0.0 -0.075"/>
+            <inertia ixx="0.0008" ixy="0.0" ixz="0.0" iyy="0.0008" iyz="0" izz="0.00015"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <!--mesh filename="meshes/mini_lower_link.obj"/-->
+                <cylinder length="0.15" radius="0.02"/>
+            </geometry>
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 -0.075"/>
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder length="0.15" radius="0.02"/>
+            </geometry>
+            <origin rpy="0 0 0" xyz="0 0 -0.075"/>
+        </collision>
+    </link>
+    <link name="toe_fr">
+    <!-- contactタグは足先の接地に関する物理的なパラメータを定義するためのもの -->
+    <contact>
+    <!-- friction_anchorは接地点の摩擦計算を安定させるためのアンカー設定 -->
+      <friction_anchor/>
+    <!-- stiffnessは接地面の硬さを表す値で、値が高いほど地面が硬く、低いほど沈み込むようになる -->
+      <stiffness value="30000.0"/>
+    <!-- dampingは接地面の減衰係数で、衝突時の跳ね返りを抑える役割を果たす -->
+      <damping value="1000.0"/>
+    <!-- spinning_frictionは地面に足先が接した状態で回転するときの摩擦抵抗を表す値 -->
+      <spinning_friction value="0.3"/>
+    <!-- lateral_frictionは横方向の摩擦係数で、ロボットが地面をけったときに滑りにくさを決定する値 -->
+      <lateral_friction value="3.0"/>
+    </contact>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <sphere radius="0.015"/>
+      </geometry>
+      <material name="darkgray"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <sphere radius="0.015"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.15"/>
+      <inertia ixx="0.00005" ixy="0" ixz="0" iyy="0.00005" iyz="0" izz="0.00005"/>
+    </inertial>
+  </link>
+  <joint name="toe_fr_joint" type="fixed">
+    <parent link="shank_fr"/>
+    <child link="toe_fr"/>
+    <origin xyz="0 0 -0.15"/>
+    <dynamics damping="0.0" friction="0.0"/>
+  </joint> 
