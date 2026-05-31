@@ -1,0 +1,250 @@
+<?xml version="1.0"?>
+<robot name="hexapod" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    hexapod.xacro
+    目的:
+      - 現在の右前脚だけのURDFを、6脚に展開しやすいxacroへ整理した版。
+      - body -> abduct -> thigh -> shank -> toe の親子関係。
+      - joint originは「親リンク座標系から見た子joint位置」として定義。
+
+    座標系の想定:
+      x: 前方
+      y: 左方
+      z: 上方
+      right side = yがマイナス
+      left  side = yがプラス
+
+    注意:
+      - Mini Cheetah由来のcontactタグはPyBulletでは使える場合がありますが、
+        ROS/Gazebo向けには <gazebo reference="toe_xx"> の接触設定に寄せています。
+      - SG90等の有限回転サーボを使う前提なら continuous ではなく revolute + limit が安全。
+  -->
+
+  <!-- ===== 基本寸法 ===== -->
+  <!--radius 半径-->
+  <xacro:property name="body_radius" value="0.22"/>
+  <!--length 長さ -->
+  <xacro:property name="body_length" value="0.05"/>
+  <xacro:property name="abduct_length" value="0.15"/>
+  <xacro:property name="thigh_length"  value="0.15"/>
+  <xacro:property name="shank_length"  value="0.15"/>
+  <xacro:property name="link_radius"   value="0.02"/>
+  <xacro:property name="toe_radius"    value="0.015"/>
+
+  <!-- 脚の取り付け位置。実機寸法に合わせてここだけ変える -->
+  <!-- 前足の前後位置　胴体の中心から前方へ0.16m 離れた位置に足を取り付ける-->
+  <xacro:property name="front_x"  value="0.16"/>
+  <!-- 中足の前後位置　胴体の中心から前方へ0.00m 脚の2本は胴体の真横(x軸上の原点上)に配置される-->
+  <xacro:property name="middle_x" value="0.00"/>
+  <!-- 後足の前後位置　胴体の中心から後方へ0.16m 離れた位置に足を取り付ける-->
+  <xacro:property name="rear_x"   value="-0.16"/>
+   <!-- 左足の左右位置　胴体の中心から左方へ0.14m 離れた位置に足を取り付ける-->
+  <xacro:property name="left_y"   value="0.14"/>
+  <!-- 右足の左右位置　胴体の中心から右方へ0.14m 離れた位置に足を取り付ける-->
+  <xacro:property name="right_y"  value="-0.14"/>
+ <!-- 脚の高さ 脚の高さ方向の取り付け位置も胴体の厚みに連動するようにプログラムされている-->
+  <xacro:property name="hip_z"    value="${-body_length/2.0}"/>
+
+  <!-- joint limit。まずは広め。SG90実機に合わせて必ず調整する 
+  <xacro:property name="abad_lower" value="-0.80"/>
+  <xacro:property name="abad_upper" value="0.80"/>
+  <xacro:property name="hip_lower"  value="-1.57"/>
+  <xacro:property name="hip_upper"  value="1.57"/>
+  <xacro:property name="knee_lower" value="-1.57"/>
+  <xacro:property name="knee_upper" value="1.57"/>
+  <xacro:property name="joint_effort" value="2.0"/>
+  <xacro:property name="joint_velocity" value="6.0"/>　-->
+
+  <!-- ===== material ===== -->
+  <material name="body_gray">
+    <color rgba="0.55 0.55 0.55 1.0"/>
+  </material>
+  <material name="link_gray">
+    <color rgba="0.25 0.25 0.25 1.0"/>
+  </material>
+  <material name="darkgray">
+    <color rgba="0.08 0.08 0.08 1.0"/>
+  </material>
+
+  <!-- ===== 汎用リンクマクロ ===== -->
+  <xacro:macro name="cylinder_link" params="name mass length radius ixx iyy izz com_z">
+    <link name="${name}">
+      <inertial>
+        <mass value="${mass}"/>
+        <origin xyz="0 0 ${com_z}" rpy="0 0 0"/>
+        <inertia ixx="${ixx}" ixy="0" ixz="0"
+                 iyy="${iyy}" iyz="0"
+                 izz="${izz}"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 ${-length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${length}" radius="${radius}"/>
+        </geometry>
+        <material name="link_gray"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${-length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${length}" radius="${radius}"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="toe_link" params="name">
+    <link name="${name}">
+      <inertial>
+        <mass value="0.15"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="0.00005" ixy="0" ixz="0"
+                 iyy="0.00005" iyz="0"
+                 izz="0.00005"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <sphere radius="${toe_radius}"/>
+        </geometry>
+        <material name="darkgray"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <sphere radius="${toe_radius}"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <!-- ===== body ===== -->
+  <link name="body">
+    <inertial>
+      <mass value="3.3"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.02" ixy="0" ixz="0"
+               iyy="0.02" iyz="0"
+               izz="0.03"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="${body_length}" radius="${body_radius}"/>
+      </geometry>
+      <material name="body_gray"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="${body_length}" radius="${body_radius}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- ===== 脚マクロ ===== -->
+  <xacro:macro name="leg" params="prefix x y hip_axis_y:=-1">
+    <!-- body -> abduct -->
+    <joint name="body_to_abduct_${prefix}_j" type="revolute">
+      <parent link="body"/>
+      <child link="abduct_${prefix}"/>
+      <origin xyz="${x} ${y} ${hip_z}" rpy="0 0 0"/>
+      <axis xyz="1 0 0"/>
+     <!-- <limit lower="${abad_lower}" upper="${abad_upper}"
+             effort="${joint_effort}" velocity="${joint_velocity}"/> -->
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+
+    <xacro:cylinder_link
+      name="abduct_${prefix}"
+      mass="0.54"
+      length="${abduct_length}"
+      radius="${link_radius}"
+      ixx="0.001"
+      iyy="0.0001"
+      izz="0.0001"
+      com_z="${-abduct_length/2.0}"/>
+
+    <!-- abduct -> thigh
+         現在のURDFではここに body基準っぽい xyz="0.22 0 -0.025" が入っていたが、
+         child/parentの関係では「abduct_frから見たjoint位置」なので、
+         abductリンクの先端 = z方向 -abduct_length に置く。 -->
+    <joint name="abduct_${prefix}_to_thigh_${prefix}_j" type="revolute">
+      <parent link="abduct_${prefix}"/>
+      <child link="thigh_${prefix}"/>
+      <origin xyz="0 0 ${-abduct_length}" rpy="0 0 0"/>
+      <axis xyz="0 ${hip_axis_y} 0"/>
+     <!-- <limit lower="${hip_lower}" upper="${hip_upper}"
+             effort="${joint_effort}" velocity="${joint_velocity}"/> -->
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+
+    <xacro:cylinder_link
+      name="thigh_${prefix}"
+      mass="0.634"
+      length="${thigh_length}"
+      radius="${link_radius}"
+      ixx="0.001"
+      iyy="0.001"
+      izz="0.0002"
+      com_z="${-thigh_length/2.0}"/>
+
+    <!-- thigh -> shank
+         thighリンクはz方向に -thigh_length だけ伸びるので、膝jointもその先端へ置く。 -->
+    <joint name="thigh_${prefix}_to_shank_${prefix}_j" type="revolute">
+      <parent link="thigh_${prefix}"/>
+      <child link="shank_${prefix}"/>
+      <origin xyz="0 0 ${-thigh_length}" rpy="0 0 0"/>
+      <axis xyz="0 ${hip_axis_y} 0"/>
+     <!-- <limit lower="${knee_lower}" upper="${knee_upper}"
+             effort="${joint_effort}" velocity="${joint_velocity}"/> -->
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+
+    <xacro:cylinder_link
+      name="shank_${prefix}"
+      mass="0.064"
+      length="${shank_length}"
+      radius="${link_radius}"
+      ixx="0.0008"
+      iyy="0.0008"
+      izz="0.00015"
+      com_z="${-shank_length/2.0}"/>
+
+    <!-- shank -> toe -->
+    <xacro:toe_link name="toe_${prefix}"/>
+
+    <joint name="shank_${prefix}_to_toe_${prefix}_j" type="fixed">
+      <parent link="shank_${prefix}"/>
+      <child link="toe_${prefix}"/>
+      <origin xyz="0 0 ${-shank_length}" rpy="0 0 0"/>
+      <dynamics damping="0.0" friction="0.0"/>
+    </joint>
+
+    <!-- Gazebo向けの足先接触設定 -->
+    <gazebo reference="toe_${prefix}">
+      <mu1>3.0</mu1>
+      <mu2>3.0</mu2>
+      <kp>30000.0</kp>
+      <kd>1000.0</kd>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- ===== 6脚配置 ===== -->
+  <!-- 右脚: y < 0 -->
+  <!--fr 右前脚 (0.16, 0.14)  -->
+  <xacro:leg prefix="fr" x="${front_x}"  y="${right_y}" hip_axis_y="-1"/>
+  <!--mr 右中脚 (0.00, 0.14)  -->
+  <xacro:leg prefix="mr" x="${middle_x}" y="${right_y}" hip_axis_y="-1"/>
+  <!--rr 右後脚 (-0.16, 0.14)  -->
+  <xacro:leg prefix="rr" x="${rear_x}"   y="${right_y}" hip_axis_y="-1"/>
+
+  <!-- 左脚: y > 0。hip_axis_yを+1にすると左右の関節回転方向をミラーしやすい -->
+  <!--fl 左前脚 (0.16, -0.14)  -->
+  <xacro:leg prefix="fl" x="${front_x}"  y="${left_y}" hip_axis_y="1"/>
+  <!--ml 左中脚 (0.00, -0.14)  -->
+  <xacro:leg prefix="ml" x="${middle_x}" y="${left_y}" hip_axis_y="1"/>
+  <!--rl 左後脚 (-0.16, -0.14)  -->
+  <xacro:leg prefix="rl" x="${rear_x}"   y="${left_y}" hip_axis_y="1"/>
+
+</robot>
