@@ -1,0 +1,258 @@
+<?xml version="1.0"?>
+<robot name="miniquad" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    miniquad.xacro
+    ==============
+    小型 4脚ロボット (200g クラス、SG90相当サーボ 1.2〜1.6 kg·cm)
+    対象実機: Raspberry Pi 4 + IMU + PLA 車体 (インフィル 10%)
+
+    構成: 4脚 × 2自由度 (hip + knee) = 8 DOF
+    座標系: x=前方, y=左方, z=上方
+
+    質量配分 (合計 ≈ 200g):
+      body  : 100g = RPi4(46g) + IMU(3g) + PLA車体(15g) + hip サーボ×4(36g)
+      thigh : 12g  = knee サーボ(9g) + PLA リンク(3g)  × 4脚
+      shank :  3g  = PLA リンク                         × 4脚
+      toe   :  1g  = 足先                               × 4脚
+      合計  : 100 + 4×16 = 164g + 配線/ハードウェア ≈ 200g
+
+    サーボ仕様 (SG90相当):
+      最大トルク : 1.2〜1.6 kg·cm = 0.12〜0.16 N·m
+      可動範囲   : 120° (±1.05 rad) → 余裕を持って ±1.0 rad に設定
+
+    デフォルト姿勢 (standing):
+      hip = +0.3 rad, knee = -0.6 rad
+      → 重心高さ ≈ 0.11m (toe 球半径 0.010m を含む)
+
+    Genesis 使用時の注意:
+      - fixed joint (shank→toe) は Genesis が親リンクに統合するため
+        足接触検出には shank リンクを使用する
+      - recompute_inertia=True を推奨 (URDF の慣性行列の整合性を保証)
+  -->
+
+  <!-- ===== 基本寸法 ===== -->
+  <xacro:property name="body_length" value="0.10"/>   <!-- 前後 x [m] -->
+  <xacro:property name="body_width"  value="0.06"/>   <!-- 左右 y [m] -->
+  <xacro:property name="body_height" value="0.025"/>  <!-- 高さ z [m] -->
+
+  <xacro:property name="thigh_length" value="0.045"/> <!-- 大腿リンク長 [m] -->
+  <xacro:property name="shank_length" value="0.050"/> <!-- 下腿リンク長 [m] -->
+  <xacro:property name="thigh_radius" value="0.008"/> <!-- 大腿半径 [m] -->
+  <xacro:property name="shank_radius" value="0.007"/> <!-- 下腿半径 [m] -->
+  <xacro:property name="toe_radius"   value="0.010"/> <!-- 足先球半径 [m] -->
+
+  <!-- 脚の取り付け位置 -->
+  <xacro:property name="leg_x_front" value="0.040"/>   <!-- 前脚: 胴体中心から +x [m] -->
+  <xacro:property name="leg_x_rear"  value="-0.040"/>  <!-- 後脚: 胴体中心から -x [m] -->
+  <xacro:property name="leg_y"       value="0.030"/>   <!-- 左右オフセット (符号は脚マクロで設定) [m] -->
+  <xacro:property name="hip_z"       value="${-body_height/2.0}"/> <!-- = -0.0125 m -->
+
+  <!-- 関節可動域 (SG90: ±60° ≈ ±1.05 rad, 余裕をもって ±1.0 rad) -->
+  <xacro:property name="hip_lower"       value="-1.0"/>  <!-- rad -->
+  <xacro:property name="hip_upper"       value="1.0"/>   <!-- rad -->
+  <xacro:property name="knee_lower"      value="-1.57"/> <!-- rad (-90°) -->
+  <xacro:property name="knee_upper"      value="1.57"/>  <!-- rad (+90°) -->
+  <xacro:property name="joint_effort"    value="0.16"/>  <!-- N·m (1.6 kg·cm) -->
+  <xacro:property name="joint_velocity"  value="6.28"/>  <!-- rad/s (SG90: 0.12s/60°≈8.7 rad/s) -->
+
+  <!-- ===== マテリアル ===== -->
+  <material name="body_blue">
+    <color rgba="0.20 0.40 0.80 1.0"/>
+  </material>
+  <material name="link_white">
+    <color rgba="0.90 0.90 0.90 1.0"/>
+  </material>
+  <material name="toe_black">
+    <color rgba="0.10 0.10 0.10 1.0"/>
+  </material>
+
+  <!-- ===== body リンク ===== -->
+  <!--
+    box (a=0.10, b=0.06, c=0.025, m=0.100 kg):
+      Ixx = m(b² + c²)/12 = 0.100×(0.0036 + 0.000625)/12 = 3.52e-5
+      Iyy = m(a² + c²)/12 = 0.100×(0.0100 + 0.000625)/12 = 8.85e-5
+      Izz = m(a² + b²)/12 = 0.100×(0.0100 + 0.0036)/12   = 1.13e-4
+  -->
+  <link name="body">
+    <inertial>
+      <mass value="0.100"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="3.52e-5" ixy="0" ixz="0"
+               iyy="8.85e-5" iyz="0"
+               izz="1.13e-4"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+      <material name="body_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- ===== 汎用リンクマクロ ===== -->
+  <!--
+    thigh (cylinder L=0.045, r=0.008, m=0.012 kg):
+      Ixx = Iyy = m(3r² + L²)/12 = 0.012×(0.000192 + 0.002025)/12 = 2.22e-6
+      Izz = mr²/2 = 0.012×0.000064/2 = 3.84e-7
+  -->
+  <xacro:macro name="thigh_link" params="name">
+    <link name="${name}">
+      <inertial>
+        <mass value="0.012"/>
+        <origin xyz="0 0 ${-thigh_length/2.0}" rpy="0 0 0"/>
+        <inertia ixx="2.22e-6" ixy="0" ixz="0"
+                 iyy="2.22e-6" iyz="0"
+                 izz="3.84e-7"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 ${-thigh_length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${thigh_length}" radius="${thigh_radius}"/>
+        </geometry>
+        <material name="link_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${-thigh_length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${thigh_length}" radius="${thigh_radius}"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <!--
+    shank (cylinder L=0.050, r=0.007, m=0.003 kg):
+      Ixx = Iyy = m(3r² + L²)/12 = 0.003×(0.000147 + 0.002500)/12 = 6.62e-7
+      Izz = mr²/2 = 0.003×0.000049/2 = 7.35e-8
+  -->
+  <xacro:macro name="shank_link" params="name">
+    <link name="${name}">
+      <inertial>
+        <mass value="0.003"/>
+        <origin xyz="0 0 ${-shank_length/2.0}" rpy="0 0 0"/>
+        <inertia ixx="6.62e-7" ixy="0" ixz="0"
+                 iyy="6.62e-7" iyz="0"
+                 izz="7.35e-8"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 ${-shank_length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${shank_length}" radius="${shank_radius}"/>
+        </geometry>
+        <material name="link_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${-shank_length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${shank_length}" radius="${shank_radius}"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <!--
+    toe (sphere r=0.010, m=0.001 kg):
+      I = 2mr²/5 = 2×0.001×0.0001/5 = 4.0e-8
+  -->
+  <xacro:macro name="toe_link" params="name">
+    <link name="${name}">
+      <inertial>
+        <mass value="0.001"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="4.0e-8" ixy="0" ixz="0"
+                 iyy="4.0e-8" iyz="0"
+                 izz="4.0e-8"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <sphere radius="${toe_radius}"/>
+        </geometry>
+        <material name="toe_black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <sphere radius="${toe_radius}"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <!-- ===== 脚マクロ ===== -->
+  <!--
+    params:
+      prefix : 脚の識別子 (fr=前右, fl=前左, rr=後右, rl=後左)
+      x, y   : hip joint の body 基準取り付け位置 [m]
+
+    関節軸:
+      hip  : y軸回転 → 脚の前後スイング (正=前進方向)
+      knee : y軸回転 → 膝の屈伸        (負=膝曲げ)
+
+    左右で同じ y 軸を使用: 対称な sagittal-plane 動作
+  -->
+  <xacro:macro name="leg" params="prefix x y">
+
+    <!-- body → thigh (hip 関節) -->
+    <joint name="body_to_hip_${prefix}_j" type="revolute">
+      <parent link="body"/>
+      <child link="thigh_${prefix}"/>
+      <origin xyz="${x} ${y} ${hip_z}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="${hip_lower}" upper="${hip_upper}"
+             effort="${joint_effort}" velocity="${joint_velocity}"/>
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+
+    <xacro:thigh_link name="thigh_${prefix}"/>
+
+    <!-- thigh → shank (knee 関節) -->
+    <joint name="hip_${prefix}_to_knee_${prefix}_j" type="revolute">
+      <parent link="thigh_${prefix}"/>
+      <child link="shank_${prefix}"/>
+      <origin xyz="0 0 ${-thigh_length}" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="${knee_lower}" upper="${knee_upper}"
+             effort="${joint_effort}" velocity="${joint_velocity}"/>
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+
+    <xacro:shank_link name="shank_${prefix}"/>
+
+    <!-- shank → toe (固定関節: Genesis が shank に統合) -->
+    <xacro:toe_link name="toe_${prefix}"/>
+    <joint name="shank_${prefix}_to_toe_${prefix}_j" type="fixed">
+      <parent link="shank_${prefix}"/>
+      <child link="toe_${prefix}"/>
+      <origin xyz="0 0 ${-shank_length}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Gazebo 向け足先摩擦設定 -->
+    <gazebo reference="toe_${prefix}">
+      <mu1>2.0</mu1>
+      <mu2>2.0</mu2>
+      <kp>20000.0</kp>
+      <kd>500.0</kd>
+    </gazebo>
+
+  </xacro:macro>
+
+  <!-- ===== 4脚配置 ===== -->
+  <!-- 前右 (fr): +x, -y -->
+  <xacro:leg prefix="fr" x="${leg_x_front}"  y="${-leg_y}"/>
+  <!-- 前左 (fl): +x, +y -->
+  <xacro:leg prefix="fl" x="${leg_x_front}"  y="${ leg_y}"/>
+  <!-- 後右 (rr): -x, -y -->
+  <xacro:leg prefix="rr" x="${leg_x_rear}"   y="${-leg_y}"/>
+  <!-- 後左 (rl): -x, +y -->
+  <xacro:leg prefix="rl" x="${leg_x_rear}"   y="${ leg_y}"/>
+
+</robot>
