@@ -1,0 +1,282 @@
+<?xml version="1.0"?>
+<robot name="miniquad_2dof" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    miniquad_2dof.xacro
+    ===================
+    小型 4脚ロボット (200g クラス、SG90) — 膝なし 2DOF-hip 設計
+
+    【設計思想】
+      旧 miniquad: hip(y軸) + knee(y軸) = 矢状面のみ
+      新 設計    : coxa(x軸, 外転) + femur(y軸, 前後) = 3次元足先軌跡可能
+
+    【自由度構成 (4脚 × 2DOF = 8DOF)】
+      Joint 1 — body_to_coxa : x軸回転 (±45° = ±0.785 rad)
+                  → 脚を側方に傾ける。正方向 = 内転 = 足先が上がる。
+                    スイング相でここを傾けることで膝なしでも足先が浮く。
+      Joint 2 — coxa_to_femur: y軸回転 (±60° = ±1.047 rad)
+                  → 脚の前後スイング。正方向 = 前進スイング。
+
+    【足先浮き上がり機構 (膝なし)】
+      coxa をθ=30° 内転させると足先は:
+        Δz = femur_length × (1 - cosθ) = 0.050 × 0.134 = 6.7mm 上昇
+        Δy = femur_length × sinθ      = 0.050 × 0.500 = 25mm 内側移動
+      → トロット時: スイング脚のみ coxa を傾けて浮かせ、着地時に 0 に戻す。
+
+    【SG90 トルク検証】
+      体重 200g / 4脚 = 50g = 0.49 N per leg (静的)
+      最悪時トルク (脚が 30° 傾斜): 0.49 × sin30° × 0.050 = 0.012 N·m
+      SG90 定格: 0.157 N·m → 安全係数 13 倍 → OK
+
+    【寸法】
+      胴体: 100mm × 60mm × 20mm (厚みを薄く: 旧 25mm → 20mm)
+      coxa リンク: 12mm (2 番目のサーボ本体の高さ相当)
+      femur (脚): 50mm (旧 thigh 45mm + shank 50mm = 95mm → 大幅短縮)
+      足先: 球 r=8mm (旧 10mm → 若干小さく)
+      重心高さ: 10 + 12 + 50 + 8 = 80mm (旧 113mm → 低重心で安定)
+
+    【質量配分 (合計 ≈ 200g)】
+      body   : 105g = RPi4(46g) + IMU(3g) + PCA9685(5g) + PLA胴体(15g)
+                      + coxa サーボ×4 (4×9=36g)
+      coxa   :  10g = femur サーボ(9g) + PLA ブラケット(1g)      × 4脚
+      femur  :   3g = PLA 脚ロッド                               × 4脚
+      toe    :   1g = ゴムチップ                                 × 4脚
+      合計   : 105 + 4×(10+3+1) = 105 + 56 = 161g
+      残り   : LiPo 2S 500mAh(26g) + BEC×2(5g) + 配線/ネジ(8g) ≈ 200g
+
+    【配線アーキテクチャ】
+      LiPo 2S (7.4V)
+        ├─ BEC 5V/3A → PCA9685 Vcc + 8× SG90 電源
+        └─ BEC 5V/3A → RPi4 USB-C 給電
+      RPi4 I²C (SDA=GPIO2, SCL=GPIO3)
+        ├─ PCA9685 (addr=0x40): CH0〜CH7 → 8× SG90 PWM (50Hz)
+        └─ IMU MPU-6050 (addr=0x68): 姿勢推定
+
+    Genesis 使用注意:
+      - fixed joint (femur → toe) は Genesis が femur に統合
+      - 足接触検出: femur CoM z > 0.020m で空中判定 (旧: shank CoM > 0.035m)
+      - recompute_inertia=True 推奨
+  -->
+
+  <!-- ===== 基本寸法 ===== -->
+  <xacro:property name="body_length" value="0.100"/>  <!-- 前後 x [m] -->
+  <xacro:property name="body_width"  value="0.060"/>  <!-- 左右 y [m] -->
+  <xacro:property name="body_height" value="0.020"/>  <!-- 高さ z [m] (旧 0.025 → 薄型) -->
+
+  <!-- coxa: 2番目のサーボ (femur サーボ) の胴体高さ相当 -->
+  <xacro:property name="coxa_length" value="0.012"/>  <!-- coxa リンク長 [m] -->
+  <xacro:property name="coxa_radius" value="0.011"/>  <!-- SG90 幅の半径近似 [m] -->
+
+  <!-- femur: 唯一の脚リンク (旧 thigh+shank=95mm → 50mm に短縮) -->
+  <xacro:property name="femur_length" value="0.050"/> <!-- 脚長 [m] -->
+  <xacro:property name="femur_radius" value="0.006"/> <!-- 脚半径 [m] -->
+
+  <xacro:property name="toe_radius" value="0.008"/>   <!-- 足先球半径 [m] (旧 0.010 → 小型化) -->
+
+  <!-- 脚取り付け位置 (旧設計と同じ) -->
+  <xacro:property name="leg_x_front" value="0.040"/>
+  <xacro:property name="leg_x_rear"  value="-0.040"/>
+  <xacro:property name="leg_y"       value="0.030"/>
+  <xacro:property name="hip_z"       value="${-body_height/2.0}"/> <!-- = -0.010 m -->
+
+  <!-- 関節可動域 -->
+  <!-- coxa (x軸, 外転): ±45° → 足先浮き 6.7mm (±0.785 rad) -->
+  <xacro:property name="coxa_lower"      value="-0.785"/>
+  <xacro:property name="coxa_upper"      value="0.785"/>
+  <!-- femur (y軸, 前後): ±60° (±1.047 rad) -->
+  <xacro:property name="femur_lower"     value="-1.047"/>
+  <xacro:property name="femur_upper"     value="1.047"/>
+  <xacro:property name="joint_effort"    value="0.16"/>   <!-- N·m (SG90 1.6 kg·cm) -->
+  <xacro:property name="joint_velocity"  value="6.28"/>   <!-- rad/s -->
+
+  <!-- ===== マテリアル ===== -->
+  <material name="body_blue">
+    <color rgba="0.20 0.40 0.80 1.0"/>
+  </material>
+  <material name="coxa_gray">
+    <color rgba="0.50 0.50 0.50 1.0"/>
+  </material>
+  <material name="femur_white">
+    <color rgba="0.90 0.90 0.90 1.0"/>
+  </material>
+  <material name="toe_black">
+    <color rgba="0.10 0.10 0.10 1.0"/>
+  </material>
+
+  <!-- ===== body リンク ===== -->
+  <!--
+    box (a=0.100, b=0.060, c=0.020, m=0.105 kg):
+      Ixx = m(b² + c²)/12 = 0.105×(0.0036 + 0.0004)/12 = 3.50e-5
+      Iyy = m(a² + c²)/12 = 0.105×(0.0100 + 0.0004)/12 = 9.10e-5
+      Izz = m(a² + b²)/12 = 0.105×(0.0100 + 0.0036)/12 = 1.19e-4
+  -->
+  <link name="body">
+    <inertial>
+      <mass value="0.105"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="3.50e-5" ixy="0" ixz="0"
+               iyy="9.10e-5" iyz="0"
+               izz="1.19e-4"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+      <material name="body_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- ===== 脚マクロ ===== -->
+  <!--
+    params:
+      prefix : fr / fl / rr / rl
+      x, y   : body 基準の hip 取り付け位置 [m]
+
+    関節軸:
+      body_to_coxa  : x 軸回転 → 外転 (内転で足先が上がる)
+      coxa_to_femur : y 軸回転 → 前後スイング
+
+    coxa リンク: femur サーボ本体の簡易モデル
+    femur リンク: 脚ロッド (直下方向 -z)
+    toe  リンク: 足先ゴムチップ (fixed, Genesis が femur に統合)
+  -->
+  <xacro:macro name="leg_2dof" params="prefix x y">
+
+    <!-- ── Joint 1: body → coxa (x軸, 外転/内転) ── -->
+    <joint name="body_to_coxa_${prefix}_j" type="revolute">
+      <parent link="body"/>
+      <child  link="coxa_${prefix}"/>
+      <origin xyz="${x} ${y} ${hip_z}" rpy="0 0 0"/>
+      <!-- x軸回転: 正=+y 方向へ脚が傾く (右脚=内転=足先上昇) -->
+      <axis xyz="1 0 0"/>
+      <limit lower="${coxa_lower}" upper="${coxa_upper}"
+             effort="${joint_effort}" velocity="${joint_velocity}"/>
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+
+    <!--
+      coxa リンク (femur サーボ本体近似: cylinder L=0.012, r=0.011, m=0.010 kg)
+        Ixx = Iyy = m(3r² + L²)/12 = 0.010×(0.000363 + 0.000144)/12 = 4.23e-7
+        Izz = mr²/2 = 0.010×0.000121/2 = 6.05e-7
+      CoM: coxa 軸から -z 方向に coxa_length/2 の位置
+    -->
+    <link name="coxa_${prefix}">
+      <inertial>
+        <mass value="0.010"/>
+        <origin xyz="0 0 ${-coxa_length/2.0}" rpy="0 0 0"/>
+        <inertia ixx="4.23e-7" ixy="0" ixz="0"
+                 iyy="4.23e-7" iyz="0"
+                 izz="6.05e-7"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 ${-coxa_length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${coxa_length}" radius="${coxa_radius}"/>
+        </geometry>
+        <material name="coxa_gray"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${-coxa_length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${coxa_length}" radius="${coxa_radius}"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <!-- ── Joint 2: coxa → femur (y軸, 前後スイング) ── -->
+    <joint name="coxa_${prefix}_to_femur_${prefix}_j" type="revolute">
+      <parent link="coxa_${prefix}"/>
+      <child  link="femur_${prefix}"/>
+      <!-- coxa リンク先端から femur が始まる -->
+      <origin xyz="0 0 ${-coxa_length}" rpy="0 0 0"/>
+      <!-- y軸回転: 正=前方スイング (x正方向に足先が動く) -->
+      <axis xyz="0 1 0"/>
+      <limit lower="${femur_lower}" upper="${femur_upper}"
+             effort="${joint_effort}" velocity="${joint_velocity}"/>
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+
+    <!--
+      femur リンク (脚ロッド: cylinder L=0.050, r=0.006, m=0.003 kg)
+        Ixx = Iyy = m(3r² + L²)/12 = 0.003×(0.000108 + 0.002500)/12 = 6.52e-7
+        Izz = mr²/2 = 0.003×0.000036/2 = 5.40e-8
+      CoM: femur 関節から -z 方向に femur_length/2 の位置
+      足接触検出: femur CoM z > 0.020m で空中判定 (miniquad_env.py で使用)
+    -->
+    <link name="femur_${prefix}">
+      <inertial>
+        <mass value="0.003"/>
+        <origin xyz="0 0 ${-femur_length/2.0}" rpy="0 0 0"/>
+        <inertia ixx="6.52e-7" ixy="0" ixz="0"
+                 iyy="6.52e-7" iyz="0"
+                 izz="5.40e-8"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 ${-femur_length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${femur_length}" radius="${femur_radius}"/>
+        </geometry>
+        <material name="femur_white"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${-femur_length/2.0}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder length="${femur_length}" radius="${femur_radius}"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <!--
+      toe リンク (足先ゴムチップ: sphere r=0.008, m=0.001 kg)
+        I = 2mr²/5 = 2×0.001×0.000064/5 = 2.56e-8
+    -->
+    <link name="toe_${prefix}">
+      <inertial>
+        <mass value="0.001"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="2.56e-8" ixy="0" ixz="0"
+                 iyy="2.56e-8" iyz="0"
+                 izz="2.56e-8"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <sphere radius="${toe_radius}"/>
+        </geometry>
+        <material name="toe_black"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <sphere radius="${toe_radius}"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <!-- femur → toe (固定: Genesis が femur に統合) -->
+    <joint name="femur_${prefix}_to_toe_${prefix}_j" type="fixed">
+      <parent link="femur_${prefix}"/>
+      <child  link="toe_${prefix}"/>
+      <origin xyz="0 0 ${-femur_length}" rpy="0 0 0"/>
+    </joint>
+
+  </xacro:macro>
+
+  <!-- ===== 4脚配置 ===== -->
+  <!-- 前右 (fr): +x, -y -->
+  <xacro:leg_2dof prefix="fr" x="${ leg_x_front}" y="${-leg_y}"/>
+  <!-- 前左 (fl): +x, +y -->
+  <xacro:leg_2dof prefix="fl" x="${ leg_x_front}" y="${ leg_y}"/>
+  <!-- 後右 (rr): -x, -y -->
+  <xacro:leg_2dof prefix="rr" x="${ leg_x_rear}"  y="${-leg_y}"/>
+  <!-- 後左 (rl): -x, +y -->
+  <xacro:leg_2dof prefix="rl" x="${ leg_x_rear}"  y="${ leg_y}"/>
+
+</robot>

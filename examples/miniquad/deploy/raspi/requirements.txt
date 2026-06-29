@@ -1,0 +1,25 @@
+# miniquad RPi4 コントローラー 依存パッケージ
+#
+# インストール方法:
+#   pip3 install -r requirements.txt
+#
+# ※ adafruit-blinka は RPi4 (Linux/arm64) でのみ正しく動作する
+#   Blinka インストール前に以下を実行:
+#     pip3 install --upgrade setuptools pip
+#     sudo apt-get install -y python3-smbus i2c-tools
+
+# ─── Adafruit ドライバ ──────────────────────────────────────────────
+adafruit-blinka              # GPIO/I2C 抽象化レイヤー (RPi4 対応)
+adafruit-circuitpython-pca9685  # PCA9685 PWM ドライバ
+adafruit-circuitpython-bno055   # BNO055 IMU ドライバ
+
+# ─── ML 推論 ─────────────────────────────────────────────────────────
+# ARM64 用: https://github.com/nknytk/built-onnxruntime-for-raspberrypi-linux
+# Ubuntu 22.04 LTS (64bit) / RPi OS Bookworm (64bit) は pip 版で動作する
+onnxruntime                  # CPU 推論 (ARM64 builds available on PyPI ≥1.17)
+
+# ─── 数値計算 ────────────────────────────────────────────────────────
+numpy>=1.21                  # 配列演算
+
+# ─── オプション: ログ解析 ─────────────────────────────────────────────
+# pandas                     # CSV 解析 (RPi4 では重いため任意)
